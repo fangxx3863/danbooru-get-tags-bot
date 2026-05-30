@@ -16,11 +16,15 @@ _MODEL_DIR = os.environ.get("ONNX_MODEL_DIR", os.path.join(_PROJECT_ROOT, "model
 _MODEL_PATH = os.path.join(_MODEL_DIR, "camie-tagger-v2.onnx")
 _METADATA_PATH = os.path.join(_MODEL_DIR, "camie-tagger-v2-metadata.json")
 
-_HF_BASE = "https://huggingface.co/Camais03/camie-tagger-v2/resolve/main"
-_HF_MODEL_URL = f"{_HF_BASE}/camie-tagger-v2.onnx?download=true"
-_HF_METADATA_URL = f"{_HF_BASE}/camie-tagger-v2-metadata.json?download=true"
+_HF_FILE_MODEL = "camie-tagger-v2.onnx?download=true"
+_HF_FILE_METADATA = "camie-tagger-v2-metadata.json?download=true"
+_HF_SOURCES = [
+    "https://huggingface.co/Camais03/camie-tagger-v2/resolve/main",
+    "https://hf-mirror.com/Camais03/camie-tagger-v2/resolve/main",
+]
 
 _DOWNLOAD_THREADS = 8
+_DOWNLOAD_TIMEOUT = (15, 120)
 
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -55,18 +59,28 @@ def _download_chunk(url: str, start: int, end: int, dest_path: str) -> None:
                 f.write(chunk)
 
 
-def _download_file(url: str, dest: str) -> None:
+def _download_file(file_name: str, dest: str) -> None:
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     name = os.path.basename(dest)
 
-    head = requests.head(url, timeout=30)
-    total = int(head.headers.get("content-length", 0))
-    supports_range = head.headers.get("accept-ranges") == "bytes" and total > 0
+    last_error = None
+    for base_url in _HF_SOURCES:
+        url = f"{base_url}/{file_name}"
+        try:
+            head = requests.head(url, timeout=_DOWNLOAD_TIMEOUT)
+            head.raise_for_status()
+            total = int(head.headers.get("content-length", 0))
+            supports_range = head.headers.get("accept-ranges") == "bytes" and total > 0
 
-    if supports_range and total > 50 * 1024 * 1024:
-        _parallel_download(url, dest, total, name)
-    else:
-        _sequential_download(url, dest, total, name)
+            if supports_range and total > 50 * 1024 * 1024:
+                _parallel_download(url, dest, total, name)
+            else:
+                _sequential_download(url, dest, total, name)
+            return
+        except requests.RequestException as e:
+            last_error = e
+            logger.warning("%s: %s 失败, 尝试下一个源", base_url, e)
+    raise RuntimeError(f"下载失败 {name}: {last_error}")
 
 
 def _parallel_download(url: str, dest: str, total: int, name: str) -> None:
@@ -122,12 +136,12 @@ def _sequential_download(url: str, dest: str, total: int, name: str) -> None:
 def _ensure_model_files() -> None:
     os.makedirs(_MODEL_DIR, exist_ok=True)
     if not os.path.exists(_MODEL_PATH):
-        logger.info("模型文件不存在，开始从 HuggingFace 下载 (789MB)...")
-        _download_file(_HF_MODEL_URL, _MODEL_PATH)
+        logger.info("模型文件不存在，开始下载 (789MB)...")
+        _download_file(_HF_FILE_MODEL, _MODEL_PATH)
         logger.info("模型下载完成: %s", _MODEL_PATH)
     if not os.path.exists(_METADATA_PATH):
         logger.info("元数据文件不存在，开始下载...")
-        _download_file(_HF_METADATA_URL, _METADATA_PATH)
+        _download_file(_HF_FILE_METADATA, _METADATA_PATH)
         logger.info("元数据下载完成: %s", _METADATA_PATH)
 
 
