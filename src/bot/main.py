@@ -7,13 +7,17 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 from src.bot.config_manager import ConfigManager
 from src.bot.onnx_tagger import ONNXTagger
 
+class _GetUpdatesFilter(logging.Filter):
+    def filter(self, record):
+        return "getUpdates" not in record.getMessage()
+
 # Set up logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("httpx").addFilter(_GetUpdatesFilter())
+logging.getLogger("httpcore").addFilter(_GetUpdatesFilter())
 logger = logging.getLogger(__name__)
 
 _config = ConfigManager()

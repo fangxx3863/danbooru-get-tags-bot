@@ -1,8 +1,7 @@
 import os
+import sys
 import json
 import logging
-import tempfile
-import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -18,8 +17,8 @@ _MODEL_PATH = os.path.join(_MODEL_DIR, "camie-tagger-v2.onnx")
 _METADATA_PATH = os.path.join(_MODEL_DIR, "camie-tagger-v2-metadata.json")
 
 _HF_BASE = "https://huggingface.co/Camais03/camie-tagger-v2/resolve/main"
-_HF_MODEL_URL = f"{_HF_BASE}/camie-tagger-v2.onnx"
-_HF_METADATA_URL = f"{_HF_BASE}/camie-tagger-v2-metadata.json"
+_HF_MODEL_URL = f"{_HF_BASE}/camie-tagger-v2.onnx?download=true"
+_HF_METADATA_URL = f"{_HF_BASE}/camie-tagger-v2-metadata.json?download=true"
 
 _DOWNLOAD_THREADS = 8
 
@@ -79,11 +78,10 @@ def _parallel_download(url: str, dest: str, total: int, name: str) -> None:
         if start < total:
             ranges.append((start, end))
 
-    # Pre-allocate file
     with open(dest, "wb") as f:
         f.truncate(total)
 
-    with tqdm(total=total, unit="B", unit_scale=True, desc=name) as pbar:
+    with tqdm(total=total, unit="B", unit_scale=True, desc=name, file=sys.stderr, position=0, leave=True, mininterval=1) as pbar:
         with ThreadPoolExecutor(max_workers=_DOWNLOAD_THREADS) as executor:
             futures = {
                 executor.submit(_download_chunk, url, s, e, dest): (s, e)
@@ -99,7 +97,7 @@ def _sequential_download(url: str, dest: str, total: int, name: str) -> None:
     resp = requests.get(url, stream=True, timeout=120)
     resp.raise_for_status()
     with open(dest, "wb") as f:
-        with tqdm(total=total, unit="B", unit_scale=True, desc=name) as pbar:
+        with tqdm(total=total, unit="B", unit_scale=True, desc=name, file=sys.stderr, position=0, leave=True, mininterval=1) as pbar:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
@@ -109,9 +107,13 @@ def _sequential_download(url: str, dest: str, total: int, name: str) -> None:
 def _ensure_model_files() -> None:
     os.makedirs(_MODEL_DIR, exist_ok=True)
     if not os.path.exists(_MODEL_PATH):
+        logger.info("模型文件不存在，开始从 HuggingFace 下载 (789MB)...")
         _download_file(_HF_MODEL_URL, _MODEL_PATH)
+        logger.info("模型下载完成: %s", _MODEL_PATH)
     if not os.path.exists(_METADATA_PATH):
+        logger.info("元数据文件不存在，开始下载...")
         _download_file(_HF_METADATA_URL, _METADATA_PATH)
+        logger.info("元数据下载完成: %s", _METADATA_PATH)
 
 
 def preprocess_image_pil(pil_image: Image.Image) -> np.ndarray:
