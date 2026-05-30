@@ -16,11 +16,12 @@ _MODEL_DIR = os.environ.get("ONNX_MODEL_DIR", os.path.join(_PROJECT_ROOT, "model
 _MODEL_PATH = os.path.join(_MODEL_DIR, "camie-tagger-v2.onnx")
 _METADATA_PATH = os.path.join(_MODEL_DIR, "camie-tagger-v2-metadata.json")
 
-_HF_FILE_MODEL = "camie-tagger-v2.onnx?download=true"
-_HF_FILE_METADATA = "camie-tagger-v2-metadata.json?download=true"
+_HF_FILE_MODEL = "camie-tagger-v2.onnx"
+_HF_FILE_METADATA = "camie-tagger-v2-metadata.json"
 _HF_SOURCES = [
-    "https://huggingface.co/Camais03/camie-tagger-v2/resolve/main",
+    "https://www.modelscope.cn/models/gaowanliang/camie-tagger-v2/resolve/master",
     "https://hf-mirror.com/Camais03/camie-tagger-v2/resolve/main",
+    "https://huggingface.co/Camais03/camie-tagger-v2/resolve/main",
 ]
 
 _DOWNLOAD_THREADS = 8
@@ -78,7 +79,9 @@ def _download_file(file_name: str, dest: str) -> None:
                 head = future.result(timeout=_SOURCE_DEADLINE)
             head.raise_for_status()
             total = int(head.headers.get("content-length", 0))
-            supports_range = head.headers.get("accept-ranges") == "bytes" and total > 0
+            if total <= 0:
+                raise requests.RequestException(f"Content-Length 异常: {total}")
+            supports_range = head.headers.get("accept-ranges") == "bytes"
 
             logger.info("连接成功，文件大小: %.1f MB", total / 1048576)
             if supports_range and total > 50 * 1024 * 1024:
