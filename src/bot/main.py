@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 from io import BytesIO
@@ -220,6 +221,62 @@ async def handle_direct_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 
+def _build_photo_response(display_tags, banlist):
+    def _tags_for(cat):
+        tag_probs = display_tags.get(cat, [])
+        tag_names = [t for t, _ in tag_probs]
+        return filter_and_escape_tags(tag_names, banlist)
+
+    gen = _tags_for("一般")
+    char = _tags_for("角色")
+    copyr = _tags_for("版权")
+    art = _tags_for("画师")
+    meta = _tags_for("元信息")
+
+    all_parts = [p for p in [art, copyr, char, gen] if p]
+    all_tags = ", ".join(all_parts)
+
+    response = (
+        f"全部\n**>`{escape_telegram_reserved_characters(all_tags)}`||\n"
+        f"一般\n**>`{escape_telegram_reserved_characters(gen)}`||\n"
+        f"角色\n**>`{escape_telegram_reserved_characters(char)}`||\n"
+        f"版权\n**>`{escape_telegram_reserved_characters(copyr)}`||\n"
+        f"画师\n**>`{escape_telegram_reserved_characters(art)}`||\n"
+        f"元信息\n**>`{escape_telegram_reserved_characters(meta)}`||\n"
+    )
+
+    if len(response) > 4000:
+        parts = {
+            "一般": gen.split(", ") if gen else [],
+            "角色": char.split(", ") if char else [],
+            "版权": copyr.split(", ") if copyr else [],
+            "画师": art.split(", ") if art else [],
+            "元信息": meta.split(", ") if meta else [],
+        }
+        while len(response) > 4000:
+            longest = max(parts, key=lambda k: len(parts[k]))
+            if not parts[longest]:
+                break
+            parts[longest].pop()
+            gen = ", ".join(parts["一般"])
+            char = ", ".join(parts["角色"])
+            copyr = ", ".join(parts["版权"])
+            art = ", ".join(parts["画师"])
+            meta = ", ".join(parts["元信息"])
+            all_parts_list = [p for p in [art, copyr, char, gen] if p]
+            all_tags = ", ".join(all_parts_list)
+            response = (
+                f"全部\n**>`{escape_telegram_reserved_characters(all_tags)}`||\n"
+                f"一般\n**>`{escape_telegram_reserved_characters(gen)}`||\n"
+                f"角色\n**>`{escape_telegram_reserved_characters(char)}`||\n"
+                f"版权\n**>`{escape_telegram_reserved_characters(copyr)}`||\n"
+                f"画师\n**>`{escape_telegram_reserved_characters(art)}`||\n"
+                f"元信息\n**>`{escape_telegram_reserved_characters(meta)}`||\n"
+            )
+
+    return response
+
+
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle a user sending a photo: run ONNX inference and return predicted tags."""
     user_id = update.effective_user.id
@@ -235,59 +292,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pil_image = Image.open(photo_bytes)
 
         tagger = ONNXTagger()
-        display_tags = tagger.tag(pil_image)
+        # Run heavy ONNX work in a thread to avoid blocking the event loop
+        display_tags = await asyncio.to_thread(tagger.tag, pil_image)
 
-        def _tags_for(cat):
-            tag_probs = display_tags.get(cat, [])
-            tag_names = [t for t, _ in tag_probs]
-            return filter_and_escape_tags(tag_names, banlist)
-
-        gen = _tags_for("一般")
-        char = _tags_for("角色")
-        copyr = _tags_for("版权")
-        art = _tags_for("画师")
-        meta = _tags_for("元信息")
-
-        all_parts = [p for p in [art, copyr, char, gen] if p]
-        all_tags = ", ".join(all_parts)
-
-        response = (
-            f"全部\n**>`{escape_telegram_reserved_characters(all_tags)}`||\n"
-            f"一般\n**>`{escape_telegram_reserved_characters(gen)}`||\n"
-            f"角色\n**>`{escape_telegram_reserved_characters(char)}`||\n"
-            f"版权\n**>`{escape_telegram_reserved_characters(copyr)}`||\n"
-            f"画师\n**>`{escape_telegram_reserved_characters(art)}`||\n"
-            f"元信息\n**>`{escape_telegram_reserved_characters(meta)}`||\n"
-        )
-
-        if len(response) > 4000:
-            parts = {
-                "一般": gen.split(", ") if gen else [],
-                "角色": char.split(", ") if char else [],
-                "版权": copyr.split(", ") if copyr else [],
-                "画师": art.split(", ") if art else [],
-                "元信息": meta.split(", ") if meta else [],
-            }
-            while len(response) > 4000:
-                longest = max(parts, key=lambda k: len(parts[k]))
-                if not parts[longest]:
-                    break
-                parts[longest].pop()
-                gen = ", ".join(parts["一般"])
-                char = ", ".join(parts["角色"])
-                copyr = ", ".join(parts["版权"])
-                art = ", ".join(parts["画师"])
-                meta = ", ".join(parts["元信息"])
-                all_parts_list = [p for p in [art, copyr, char, gen] if p]
-                all_tags = ", ".join(all_parts_list)
-                response = (
-                    f"全部\n**>`{escape_telegram_reserved_characters(all_tags)}`||\n"
-                    f"一般\n**>`{escape_telegram_reserved_characters(gen)}`||\n"
-                    f"角色\n**>`{escape_telegram_reserved_characters(char)}`||\n"
-                    f"版权\n**>`{escape_telegram_reserved_characters(copyr)}`||\n"
-                    f"画师\n**>`{escape_telegram_reserved_characters(art)}`||\n"
-                    f"元信息\n**>`{escape_telegram_reserved_characters(meta)}`||\n"
-                )
+        response = _build_photo_response(display_tags, banlist)
 
         await status_msg.edit_text(response, parse_mode="MarkdownV2")
     except Exception as e:

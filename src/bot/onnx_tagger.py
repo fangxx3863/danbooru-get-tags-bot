@@ -81,6 +81,8 @@ def _parallel_download(url: str, dest: str, total: int, name: str) -> None:
     with open(dest, "wb") as f:
         f.truncate(total)
 
+    downloaded = 0
+    last_pct = -1
     with tqdm(total=total, unit="B", unit_scale=True, desc=name, file=sys.stderr, position=0, leave=True, mininterval=1) as pbar:
         with ThreadPoolExecutor(max_workers=_DOWNLOAD_THREADS) as executor:
             futures = {
@@ -91,17 +93,30 @@ def _parallel_download(url: str, dest: str, total: int, name: str) -> None:
                 s, e = futures[future]
                 future.result()
                 pbar.update(e - s + 1)
+                downloaded += e - s + 1
+                pct = downloaded * 100 // total
+                if pct // 10 > last_pct // 10:
+                    logger.info("下载进度 %s: %d%% (%.1f/%.1f MB)", name, pct, downloaded / 1048576, total / 1048576)
+                    last_pct = pct
 
 
 def _sequential_download(url: str, dest: str, total: int, name: str) -> None:
     resp = requests.get(url, stream=True, timeout=120)
     resp.raise_for_status()
+    downloaded = 0
+    last_pct = -1
     with open(dest, "wb") as f:
         with tqdm(total=total, unit="B", unit_scale=True, desc=name, file=sys.stderr, position=0, leave=True, mininterval=1) as pbar:
             for chunk in resp.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
                     pbar.update(len(chunk))
+                    downloaded += len(chunk)
+                    if total:
+                        pct = downloaded * 100 // total
+                        if pct // 10 > last_pct // 10:
+                            logger.info("下载进度 %s: %d%% (%.1f/%.1f MB)", name, pct, downloaded / 1048576, total / 1048576)
+                            last_pct = pct
 
 
 def _ensure_model_files() -> None:
