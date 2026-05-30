@@ -24,7 +24,7 @@ _HF_SOURCES = [
 ]
 
 _DOWNLOAD_THREADS = 8
-_DOWNLOAD_TIMEOUT = (15, 120)
+_DOWNLOAD_TIMEOUT = (10, 30)
 
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -66,12 +66,14 @@ def _download_file(file_name: str, dest: str) -> None:
     last_error = None
     for base_url in _HF_SOURCES:
         url = f"{base_url}/{file_name}"
+        logger.info("尝试从 %s 下载...", base_url)
         try:
             head = requests.head(url, timeout=_DOWNLOAD_TIMEOUT)
             head.raise_for_status()
             total = int(head.headers.get("content-length", 0))
             supports_range = head.headers.get("accept-ranges") == "bytes" and total > 0
 
+            logger.info("连接成功，文件大小: %.1f MB", total / 1048576)
             if supports_range and total > 50 * 1024 * 1024:
                 _parallel_download(url, dest, total, name)
             else:
@@ -79,7 +81,7 @@ def _download_file(file_name: str, dest: str) -> None:
             return
         except requests.RequestException as e:
             last_error = e
-            logger.warning("%s: %s 失败, 尝试下一个源", base_url, e)
+            logger.warning("%s 失败 (%s), 尝试下一个源", base_url, e)
     raise RuntimeError(f"下载失败 {name}: {last_error}")
 
 
