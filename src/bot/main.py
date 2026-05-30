@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import re
 from io import BytesIO
 from PIL import Image
@@ -277,30 +278,52 @@ def _build_photo_response(display_tags, banlist):
     return response
 
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle a user sending a photo: run ONNX inference and return predicted tags."""
-    user_id = update.effective_user.id
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
+
+
+async def _process_image_file(update: Update, context: ContextTypes.DEFAULT_TYPE, file_id, user_id: int):
+    """Download a Telegram file by file_id, run ONNX inference, and reply with tags."""
     banlist = _config.get_user_banlist(user_id)
-    photo = update.message.photo[-1]
     status_msg = await update.message.reply_text("正在分析图片，请稍候...")
 
+    file = await context.bot.get_file(file_id)
+    img_bytes = BytesIO()
+    await file.download_to_memory(img_bytes)
+    img_bytes.seek(0)
+    pil_image = Image.open(img_bytes)
+
+    tagger = ONNXTagger()
+    display_tags = await asyncio.to_thread(tagger.tag, pil_image)
+
+    response = _build_photo_response(display_tags, banlist)
+    await status_msg.edit_text(response, parse_mode="MarkdownV2")
+
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle a user sending a photo: run ONNX inference and return predicted tags."""
     try:
-        file = await context.bot.get_file(photo.file_id)
-        photo_bytes = BytesIO()
-        await file.download_to_memory(photo_bytes)
-        photo_bytes.seek(0)
-        pil_image = Image.open(photo_bytes)
-
-        tagger = ONNXTagger()
-        # Run heavy ONNX work in a thread to avoid blocking the event loop
-        display_tags = await asyncio.to_thread(tagger.tag, pil_image)
-
-        response = _build_photo_response(display_tags, banlist)
-
-        await status_msg.edit_text(response, parse_mode="MarkdownV2")
+        user_id = update.effective_user.id
+        photo = update.message.photo[-1]
+        await _process_image_file(update, context, photo.file_id, user_id)
     except Exception as e:
         logger.error("Photo processing error: %s", e)
-        await status_msg.edit_text(f"图片分析失败: {e}")
+        await update.message.reply_text(f"图片分析失败: {e}")
+
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle document messages: if it's an image file, run ONNX inference."""
+    doc = update.message.document
+    if not doc or not doc.file_name:
+        return
+    ext = os.path.splitext(doc.file_name)[1].lower()
+    if ext not in _IMAGE_EXTENSIONS:
+        return
+    try:
+        user_id = update.effective_user.id
+        await _process_image_file(update, context, doc.file_id, user_id)
+    except Exception as e:
+        logger.error("Document processing error: %s", e)
+        await update.message.reply_text(f"图片分析失败: {e}")
 
 
 def main():
@@ -328,6 +351,14 @@ def main():
         MessageHandler(
             filters.PHOTO,
             handle_photo
+        )
+    )
+
+    # Register handler for document (image file) messages
+    application.add_handler(
+        MessageHandler(
+            filters.Document.IMAGE,
+            handle_document
         )
     )
 
