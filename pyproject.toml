@@ -1,0 +1,16 @@
+[project]
+name = "danbooru-get-tags-bot"
+version = "0.2.0"
+description = "A Telegram bot to get tags from Danbooru and tag images with ONNX AI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "python-telegram-bot>=21.0",
+    "requests>=2.31.0",
+    "onnxruntime>=1.15.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+]
+
+[project.scripts]
+start = "src.bot.main:main"
