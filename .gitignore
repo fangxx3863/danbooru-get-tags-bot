@@ -16,3 +16,6 @@ config.ini
 # Model files (auto-downloaded from HuggingFace)
 models/
 ref/
+
+# Test files
+PROMPT.md

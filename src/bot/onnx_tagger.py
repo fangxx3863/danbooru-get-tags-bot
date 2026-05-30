@@ -1,9 +1,14 @@
 import os
 import json
 import logging
+import tempfile
+import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +20,8 @@ _METADATA_PATH = os.path.join(_MODEL_DIR, "camie-tagger-v2-metadata.json")
 _HF_BASE = "https://huggingface.co/Camais03/camie-tagger-v2/resolve/main"
 _HF_MODEL_URL = f"{_HF_BASE}/camie-tagger-v2.onnx"
 _HF_METADATA_URL = f"{_HF_BASE}/camie-tagger-v2-metadata.json"
+
+_DOWNLOAD_THREADS = 8
 
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -37,23 +44,66 @@ CATEGORY_MAP = {
 }
 
 
-def _download_file(url: str, dest: str) -> None:
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    logger.info("Downloading %s -> %s", url, dest)
-    resp = requests.get(url, stream=True, timeout=120)
+def _download_chunk(url: str, start: int, end: int, dest_path: str) -> None:
+    """Download a byte range to a temp chunk file."""
+    headers = {"Range": f"bytes={start}-{end}"}
+    resp = requests.get(url, headers=headers, stream=True, timeout=60)
     resp.raise_for_status()
-    total = int(resp.headers.get("content-length", 0))
-    downloaded = 0
-    with open(dest, "wb") as f:
+    with open(dest_path, "r+b") as f:
+        f.seek(start)
         for chunk in resp.iter_content(chunk_size=1024 * 1024):
             if chunk:
                 f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    pct = downloaded * 100 // total
-                    if pct % 20 == 0 and downloaded % (1024 * 1024 * 20) < len(chunk):
-                        logger.info("Download progress: %d%% (%d/%d MB)", pct, downloaded // 1048576, total // 1048576)
-    logger.info("Downloaded %s (%d MB)", os.path.basename(dest), total // 1048576)
+
+
+def _download_file(url: str, dest: str) -> None:
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    name = os.path.basename(dest)
+
+    head = requests.head(url, timeout=30)
+    total = int(head.headers.get("content-length", 0))
+    supports_range = head.headers.get("accept-ranges") == "bytes" and total > 0
+
+    if supports_range and total > 50 * 1024 * 1024:
+        _parallel_download(url, dest, total, name)
+    else:
+        _sequential_download(url, dest, total, name)
+
+
+def _parallel_download(url: str, dest: str, total: int, name: str) -> None:
+    chunk_size = (total + _DOWNLOAD_THREADS - 1) // _DOWNLOAD_THREADS
+    ranges = []
+    for i in range(_DOWNLOAD_THREADS):
+        start = i * chunk_size
+        end = min(start + chunk_size, total) - 1
+        if start < total:
+            ranges.append((start, end))
+
+    # Pre-allocate file
+    with open(dest, "wb") as f:
+        f.truncate(total)
+
+    with tqdm(total=total, unit="B", unit_scale=True, desc=name) as pbar:
+        with ThreadPoolExecutor(max_workers=_DOWNLOAD_THREADS) as executor:
+            futures = {
+                executor.submit(_download_chunk, url, s, e, dest): (s, e)
+                for s, e in ranges
+            }
+            for future in as_completed(futures):
+                s, e = futures[future]
+                future.result()
+                pbar.update(e - s + 1)
+
+
+def _sequential_download(url: str, dest: str, total: int, name: str) -> None:
+    resp = requests.get(url, stream=True, timeout=120)
+    resp.raise_for_status()
+    with open(dest, "wb") as f:
+        with tqdm(total=total, unit="B", unit_scale=True, desc=name) as pbar:
+            for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+                    pbar.update(len(chunk))
 
 
 def _ensure_model_files() -> None:
@@ -116,7 +166,7 @@ class ONNXTagger:
 
         _ensure_model_files()
 
-        logger.info("Loading ONNX model from %s", _MODEL_PATH)
+        logger.info("Loading ONNX model...")
         self._session = ort.InferenceSession(
             _MODEL_PATH,
             providers=["CPUExecutionProvider"],
@@ -130,7 +180,7 @@ class ONNXTagger:
 
         self._input_name = self._session.get_inputs()[0].name
         self._loaded = True
-        logger.info("ONNX model loaded successfully")
+        logger.info("ONNX model loaded")
 
     def tag(self, pil_image: Image.Image) -> dict:
         self._load()
