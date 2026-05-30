@@ -79,11 +79,9 @@ def _download_file(file_name: str, dest: str) -> None:
                 head = future.result(timeout=_SOURCE_DEADLINE)
             head.raise_for_status()
             total = int(head.headers.get("content-length", 0))
-            if total <= 0:
-                raise requests.RequestException(f"Content-Length 异常: {total}")
-            supports_range = head.headers.get("accept-ranges") == "bytes"
+            supports_range = head.headers.get("accept-ranges") == "bytes" and total > 0
 
-            logger.info("连接成功，文件大小: %.1f MB", total / 1048576)
+            logger.info("连接成功，文件大小: %.1f MB", total / 1048576 if total else 0)
             if supports_range and total > 50 * 1024 * 1024:
                 _parallel_download(url, dest, total, name)
             else:
