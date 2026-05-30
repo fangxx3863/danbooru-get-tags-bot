@@ -25,6 +25,7 @@ _HF_SOURCES = [
 
 _DOWNLOAD_THREADS = 8
 _DOWNLOAD_TIMEOUT = (10, 30)
+_SOURCE_DEADLINE = 15
 
 _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -59,16 +60,22 @@ def _download_chunk(url: str, start: int, end: int, dest_path: str) -> None:
                 f.write(chunk)
 
 
+def _do_head(url: str):
+    """HEAD request in a dedicated thread so we can enforce a hard deadline."""
+    return requests.head(url, timeout=_DOWNLOAD_TIMEOUT)
+
+
 def _download_file(file_name: str, dest: str) -> None:
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     name = os.path.basename(dest)
 
-    last_error = None
     for base_url in _HF_SOURCES:
         url = f"{base_url}/{file_name}"
         logger.info("尝试从 %s 下载...", base_url)
         try:
-            head = requests.head(url, timeout=_DOWNLOAD_TIMEOUT)
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_do_head, url)
+                head = future.result(timeout=_SOURCE_DEADLINE)
             head.raise_for_status()
             total = int(head.headers.get("content-length", 0))
             supports_range = head.headers.get("accept-ranges") == "bytes" and total > 0
@@ -79,10 +86,11 @@ def _download_file(file_name: str, dest: str) -> None:
             else:
                 _sequential_download(url, dest, total, name)
             return
+        except TimeoutError:
+            logger.warning("%s: HEAD 请求 %d 秒超时，切下一个源", base_url, _SOURCE_DEADLINE)
         except requests.RequestException as e:
-            last_error = e
-            logger.warning("%s 失败 (%s), 尝试下一个源", base_url, e)
-    raise RuntimeError(f"下载失败 {name}: {last_error}")
+            logger.warning("%s: %s，切下一个源", base_url, e)
+    raise RuntimeError(f"下载失败 {name}: 所有源均不可用")
 
 
 def _parallel_download(url: str, dest: str, total: int, name: str) -> None:
